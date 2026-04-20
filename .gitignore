@@ -1,0 +1,17 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data files
+data/juntadas_log.csv
+data/votes.csv
+
+# Streamlit specific
+.streamlit/credentials.toml
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
