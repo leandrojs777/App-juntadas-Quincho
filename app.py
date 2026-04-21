@@ -24,7 +24,21 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-inicializar_datos()
+try:
+    inicializar_datos()
+except Exception as _e:
+    _sa_email = ""
+    try:
+        _sa_email = st.secrets["gcp_service_account"].get("client_email", "")
+    except Exception:
+        pass
+    st.error(
+        "⚠️ **No se pudo conectar a Google Sheets.**\n\n"
+        + (f"Verificá que la hoja esté compartida con:\n`{_sa_email}`\n\n" if _sa_email else "")
+        + "También revisá que el `spreadsheet_id` en los secrets sea correcto "
+        + "y que las APIs de Google Sheets y Drive estén habilitadas en tu proyecto GCP."
+    )
+    st.stop()
 
 # ── Constantes de votación ────────────────────────────────────────────────────
 # El sistema usa 3 niveles: puedo (5pts) / capaz (3pts) / no puedo (1pt)
