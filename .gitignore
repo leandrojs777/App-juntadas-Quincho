@@ -9,6 +9,7 @@ data/votes.csv
 
 # Streamlit specific
 .streamlit/credentials.toml
+.streamlit/secrets.toml
 
 # Virtual environments
 venv/

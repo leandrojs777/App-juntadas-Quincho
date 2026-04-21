@@ -1,112 +1,155 @@
-import os
 import uuid
 import pandas as pd
 import streamlit as st
-
-DATA_DIR = 'data'
-EVENTOS_FILE = os.path.join(DATA_DIR, 'eventos.csv')
-OPCIONES_FILE = os.path.join(DATA_DIR, 'opciones.csv')
-VOTOS_FILE = os.path.join(DATA_DIR, 'votos.csv')
+import gspread
+from google.oauth2.service_account import Credentials
 
 UMBRAL_CANCELACION = 4
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+COLS_EVENTOS  = ["ID_Evento", "Motivo", "Creador", "Estado"]
+COLS_OPCIONES = ["ID_Evento", "Categoria", "Opcion"]
+COLS_VOTOS    = ["ID_Evento", "Usuario", "Categoria", "Opcion", "Puntos"]
+
+
+# ── Conexión a Google Sheets ──────────────────────────────────────────────────
+
+@st.cache_resource
+def _get_client() -> gspread.Client:
+    """Devuelve un cliente gspread autenticado. Se crea una sola vez por sesión."""
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=SCOPES,
+    )
+    return gspread.authorize(creds)
+
+
+def _get_sheet(sheet_name: str) -> gspread.Worksheet:
+    """Retorna la hoja (pestaña) indicada dentro del spreadsheet configurado."""
+    client = _get_client()
+    spreadsheet_id = st.secrets["sheets"]["spreadsheet_id"]
+    spreadsheet = client.open_by_key(spreadsheet_id)
+    return spreadsheet.worksheet(sheet_name)
 
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 
 def _invalidar_cache():
-    """Limpia el cache de Streamlit después de cada operación de escritura.
-    Fuerza que la próxima lectura vaya al disco con datos frescos."""
+    """Limpia el cache de datos de Streamlit para forzar re-lectura desde Sheets."""
     st.cache_data.clear()
 
 
-def _cargar_df(file_path: str, columns: list) -> pd.DataFrame:
-    """Cargador base tolerante a archivos vacíos o inexistentes."""
+def _cargar_df(sheet_name: str, columns: list) -> pd.DataFrame:
+    """Lee una hoja de Google Sheets y la devuelve como DataFrame."""
     try:
-        df = pd.read_csv(file_path, dtype=str)
-        if 'Puntos' in df.columns:
-            df['Puntos'] = pd.to_numeric(df['Puntos'], errors='coerce').fillna(0).astype(int)
-        if df.empty:
+        sheet = _get_sheet(sheet_name)
+        records = sheet.get_all_records(expected_headers=columns)
+        if not records:
             return pd.DataFrame(columns=columns)
-        return df
-    except FileNotFoundError:
+        df = pd.DataFrame(records)
+        # Asegurar que todas las columnas esperadas existan
+        for col in columns:
+            if col not in df.columns:
+                df[col] = ""
+        if "Puntos" in df.columns:
+            df["Puntos"] = pd.to_numeric(df["Puntos"], errors="coerce").fillna(0).astype(int)
+        return df[columns]
+    except Exception:
         return pd.DataFrame(columns=columns)
+
+
+def _guardar_df(sheet_name: str, df: pd.DataFrame):
+    """Sobrescribe la hoja de Google Sheets con el contenido del DataFrame."""
+    sheet = _get_sheet(sheet_name)
+    # Limpiar toda la hoja y reescribir desde fila 1
+    sheet.clear()
+    # Escribir headers + datos
+    data = [df.columns.tolist()] + df.astype(str).values.tolist()
+    sheet.update(data, "A1")
 
 
 # ── Init ──────────────────────────────────────────────────────────────────────
 
 def inicializar_datos():
-    """Crea el directorio y los CSVs si no existen. Idempotente."""
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
+    """Crea las hojas necesarias si no existen y verifica sus headers. Idempotente."""
+    client = _get_client()
+    spreadsheet_id = st.secrets["sheets"]["spreadsheet_id"]
+    spreadsheet = client.open_by_key(spreadsheet_id)
+    existing_titles = [ws.title for ws in spreadsheet.worksheets()]
 
-    if not os.path.exists(EVENTOS_FILE):
-        pd.DataFrame(columns=['ID_Evento', 'Motivo', 'Creador', 'Estado']).to_csv(EVENTOS_FILE, index=False)
+    sheets_needed = [
+        ("eventos",  COLS_EVENTOS),
+        ("opciones", COLS_OPCIONES),
+        ("votos",    COLS_VOTOS),
+    ]
 
-    if not os.path.exists(OPCIONES_FILE):
-        pd.DataFrame(columns=['ID_Evento', 'Categoria', 'Opcion']).to_csv(OPCIONES_FILE, index=False)
-
-    if not os.path.exists(VOTOS_FILE):
-        pd.DataFrame(columns=['ID_Evento', 'Usuario', 'Categoria', 'Opcion', 'Puntos']).to_csv(VOTOS_FILE, index=False)
+    for sheet_name, cols in sheets_needed:
+        if sheet_name not in existing_titles:
+            # Si existe "Hoja 1" (hoja por defecto vacía), renombrarla
+            if "Hoja 1" in existing_titles and sheets_needed.index((sheet_name, cols)) == 0:
+                ws = spreadsheet.worksheet("Hoja 1")
+                ws.update_title(sheet_name)
+                existing_titles = [sheet_name if t == "Hoja 1" else t for t in existing_titles]
+            else:
+                ws = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=len(cols))
+            ws.append_row(cols)
+        else:
+            ws = spreadsheet.worksheet(sheet_name)
+            if not ws.row_values(1):
+                ws.append_row(cols)
 
 
 # ── Lectura con caché (TTL=5s) ────────────────────────────────────────────────
-# Cada write llama a _invalidar_cache() para forzar re-lectura inmediata.
 
 @st.cache_data(ttl=5)
 def cargar_eventos() -> pd.DataFrame:
-    return _cargar_df(EVENTOS_FILE, ['ID_Evento', 'Motivo', 'Creador', 'Estado'])
+    return _cargar_df("eventos", COLS_EVENTOS)
 
 
 @st.cache_data(ttl=5)
 def cargar_opciones() -> pd.DataFrame:
-    return _cargar_df(OPCIONES_FILE, ['ID_Evento', 'Categoria', 'Opcion'])
+    return _cargar_df("opciones", COLS_OPCIONES)
 
 
 @st.cache_data(ttl=5)
 def cargar_votos() -> pd.DataFrame:
-    return _cargar_df(VOTOS_FILE, ['ID_Evento', 'Usuario', 'Categoria', 'Opcion', 'Puntos'])
+    return _cargar_df("votos", COLS_VOTOS)
 
 
 # ── Eventos ───────────────────────────────────────────────────────────────────
 
 def crear_evento(motivo: str, creador: str) -> str:
     """Crea un nuevo evento y devuelve su ID."""
-    df = cargar_eventos()
     id_evento = str(uuid.uuid4())[:8]
-    nuevo = pd.DataFrame([{
-        'ID_Evento': id_evento,
-        'Motivo': motivo,
-        'Creador': creador,
-        'Estado': 'Abierto',
-    }])
-    df = pd.concat([df, nuevo], ignore_index=True)
-    df.to_csv(EVENTOS_FILE, index=False)
+    sheet = _get_sheet("eventos")
+    sheet.append_row([id_evento, motivo, creador, "Abierto"])
     _invalidar_cache()
     return id_evento
 
 
 def cambiar_estado_evento(id_evento: str, estado_nuevo: str) -> bool:
-    """Cambia el estado de un evento.
-    Para 'Concretado', valida que haya al menos un voto registrado.
-    Retorna True si el cambio fue exitoso, False si no se pudo.
-    """
+    """Cambia el estado de un evento. Retorna True si fue exitoso."""
     df_eventos = cargar_eventos()
-    mask = df_eventos['ID_Evento'] == id_evento
+    mask = df_eventos["ID_Evento"] == id_evento
 
     if df_eventos[mask].empty:
         return False
 
-    if estado_nuevo == 'Concretado':
+    if estado_nuevo == "Concretado":
         df_votos = cargar_votos()
         votos_reales = df_votos[
-            (df_votos['ID_Evento'] == id_evento) &
-            (df_votos['Categoria'] != 'Estado')
+            (df_votos["ID_Evento"] == id_evento) &
+            (df_votos["Categoria"] != "Estado")
         ]
         if votos_reales.empty:
-            return False  # No se puede concretar sin votos
+            return False
 
-    df_eventos.loc[mask, 'Estado'] = estado_nuevo
-    df_eventos.to_csv(EVENTOS_FILE, index=False)
+    df_eventos.loc[mask, "Estado"] = estado_nuevo
+    _guardar_df("eventos", df_eventos)
     _invalidar_cache()
     return True
 
@@ -114,19 +157,19 @@ def cambiar_estado_evento(id_evento: str, estado_nuevo: str) -> bool:
 def verificar_estado_evento(id_evento: str):
     """Auto-cancela el evento si se supera el umbral de cancelaciones."""
     df_eventos = cargar_eventos()
-    df_votos = cargar_votos()
+    df_votos   = cargar_votos()
 
     mask_cancelar = (
-        (df_votos['ID_Evento'] == id_evento) &
-        (df_votos['Categoria'] == 'Estado') &
-        (df_votos['Opcion'] == 'Cancelar')
+        (df_votos["ID_Evento"] == id_evento) &
+        (df_votos["Categoria"] == "Estado") &
+        (df_votos["Opcion"] == "Cancelar")
     )
     votos_cancelar = len(df_votos[mask_cancelar])
 
-    mask_evento = df_eventos['ID_Evento'] == id_evento
+    mask_evento = df_eventos["ID_Evento"] == id_evento
     if not df_eventos[mask_evento].empty and votos_cancelar >= UMBRAL_CANCELACION:
-        df_eventos.loc[mask_evento, 'Estado'] = 'Cancelado'
-        df_eventos.to_csv(EVENTOS_FILE, index=False)
+        df_eventos.loc[mask_evento, "Estado"] = "Cancelado"
+        _guardar_df("eventos", df_eventos)
         _invalidar_cache()
 
 
@@ -136,14 +179,13 @@ def agregar_opcion(id_evento: str, categoria: str, opcion: str):
     """Agrega una opción al evento evitando duplicados."""
     df = cargar_opciones()
     mask = (
-        (df['ID_Evento'] == id_evento) &
-        (df['Categoria'] == categoria) &
-        (df['Opcion'] == opcion)
+        (df["ID_Evento"] == id_evento) &
+        (df["Categoria"] == categoria) &
+        (df["Opcion"] == opcion)
     )
     if df[mask].empty:
-        nueva = pd.DataFrame([{'ID_Evento': id_evento, 'Categoria': categoria, 'Opcion': opcion}])
-        df = pd.concat([df, nueva], ignore_index=True)
-        df.to_csv(OPCIONES_FILE, index=False)
+        sheet = _get_sheet("opciones")
+        sheet.append_row([id_evento, categoria, opcion])
         _invalidar_cache()
 
 
@@ -151,82 +193,73 @@ def obtener_opciones_evento(id_evento: str) -> dict:
     """Retorna {Fecha: [...], Lugar: [...], Modalidad: [...]} para el evento dado."""
     df = cargar_opciones()
     if df.empty:
-        return {'Fecha': [], 'Lugar': [], 'Modalidad': []}
-    opciones = df[df['ID_Evento'] == id_evento]
+        return {"Fecha": [], "Lugar": [], "Modalidad": []}
+    opciones = df[df["ID_Evento"] == id_evento]
     return {
-        'Fecha':     opciones[opciones['Categoria'] == 'Fecha']['Opcion'].tolist(),
-        'Lugar':     opciones[opciones['Categoria'] == 'Lugar']['Opcion'].tolist(),
-        'Modalidad': opciones[opciones['Categoria'] == 'Modalidad']['Opcion'].tolist(),
+        "Fecha":     opciones[opciones["Categoria"] == "Fecha"]["Opcion"].tolist(),
+        "Lugar":     opciones[opciones["Categoria"] == "Lugar"]["Opcion"].tolist(),
+        "Modalidad": opciones[opciones["Categoria"] == "Modalidad"]["Opcion"].tolist(),
     }
 
 
 # ── Votos ─────────────────────────────────────────────────────────────────────
 
 def registrar_voto(id_evento: str, usuario: str, categoria: str, opcion: str, puntos: int):
-    """Registra o actualiza el voto de un usuario en una opción. Luego verifica auto-cancelación."""
+    """Registra o actualiza el voto de un usuario en una opción."""
     df = cargar_votos()
     mask = (
-        (df['ID_Evento'] == id_evento) &
-        (df['Usuario'] == usuario) &
-        (df['Categoria'] == categoria) &
-        (df['Opcion'] == opcion)
+        (df["ID_Evento"] == id_evento) &
+        (df["Usuario"] == usuario) &
+        (df["Categoria"] == categoria) &
+        (df["Opcion"] == opcion)
     )
     if df[mask].empty:
-        nuevo = pd.DataFrame([{
-            'ID_Evento': id_evento,
-            'Usuario': usuario,
-            'Categoria': categoria,
-            'Opcion': opcion,
-            'Puntos': int(puntos),
-        }])
-        df = pd.concat([df, nuevo], ignore_index=True)
+        # Nuevo voto: append directo (más eficiente que reescribir todo)
+        sheet = _get_sheet("votos")
+        sheet.append_row([id_evento, usuario, categoria, opcion, int(puntos)])
     else:
-        df.loc[mask, 'Puntos'] = int(puntos)
+        # Actualizar voto existente: requiere reescribir la hoja
+        df.loc[mask, "Puntos"] = int(puntos)
+        _guardar_df("votos", df)
 
-    df.to_csv(VOTOS_FILE, index=False)
     _invalidar_cache()
     verificar_estado_evento(id_evento)
 
 
 def registrar_voto_cancelar(id_evento: str, usuario: str):
-    """Registra que un usuario se bata del evento."""
-    registrar_voto(id_evento, usuario, 'Estado', 'Cancelar', 1)
+    """Registra que un usuario se baja del evento."""
+    registrar_voto(id_evento, usuario, "Estado", "Cancelar", 1)
 
 
 def registrar_voto_unico(id_evento: str, usuario: str, categoria: str, opcion: str, puntos: int = 1):
-    """Para categorías de elección única (ej: Modalidad): elimina votos previos
-    del usuario en esa categoría antes de guardar el nuevo, evitando duplicados."""
+    """Para categorías de elección única: elimina votos previos del usuario en esa categoría."""
     df = cargar_votos()
-    # Borrar cualquier voto previo del usuario en esta categoría
     mask_old = (
-        (df['ID_Evento'] == id_evento) &
-        (df['Usuario'] == usuario) &
-        (df['Categoria'] == categoria)
+        (df["ID_Evento"] == id_evento) &
+        (df["Usuario"] == usuario) &
+        (df["Categoria"] == categoria)
     )
     df = df[~mask_old]
-    # Insertar el nuevo voto
     nuevo = pd.DataFrame([{
-        'ID_Evento': id_evento,
-        'Usuario':   usuario,
-        'Categoria': categoria,
-        'Opcion':    opcion,
-        'Puntos':    int(puntos),
+        "ID_Evento": id_evento,
+        "Usuario":   usuario,
+        "Categoria": categoria,
+        "Opcion":    opcion,
+        "Puntos":    int(puntos),
     }])
     df = pd.concat([df, nuevo], ignore_index=True)
-    df.to_csv(VOTOS_FILE, index=False)
+    _guardar_df("votos", df)
     _invalidar_cache()
 
 
 def obtener_votos_usuario(id_evento: str, usuario: str) -> dict:
-    """Retorna un dict {('Categoria', 'Opcion'): puntos} con todos los votos del usuario.
-    Usado para pre-popular los sliders con valores ya existentes.
-    """
+    """Retorna un dict {('Categoria', 'Opcion'): puntos} con todos los votos del usuario."""
     df = cargar_votos()
     if df.empty:
         return {}
-    mask = (df['ID_Evento'] == id_evento) & (df['Usuario'] == usuario)
+    mask = (df["ID_Evento"] == id_evento) & (df["Usuario"] == usuario)
     return {
-        (row['Categoria'], row['Opcion']): row['Puntos']
+        (row["Categoria"], row["Opcion"]): row["Puntos"]
         for _, row in df[mask].iterrows()
     }
 
@@ -237,11 +270,11 @@ def obtener_cancelaciones_evento(id_evento: str) -> list:
     if df.empty:
         return []
     mask = (
-        (df['ID_Evento'] == id_evento) &
-        (df['Categoria'] == 'Estado') &
-        (df['Opcion'] == 'Cancelar')
+        (df["ID_Evento"] == id_evento) &
+        (df["Categoria"] == "Estado") &
+        (df["Opcion"] == "Cancelar")
     )
-    return df[mask]['Usuario'].tolist()
+    return df[mask]["Usuario"].tolist()
 
 
 def obtener_resultados_evento(id_evento: str) -> pd.DataFrame:
@@ -250,13 +283,13 @@ def obtener_resultados_evento(id_evento: str) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
     votos = df[
-        (df['ID_Evento'] == id_evento) &
-        (df['Categoria'] != 'Estado')
+        (df["ID_Evento"] == id_evento) &
+        (df["Categoria"] != "Estado")
     ]
     if votos.empty:
         return pd.DataFrame()
-    resultado = votos.groupby(['Categoria', 'Opcion'])['Puntos'].sum().reset_index()
-    return resultado.sort_values(['Categoria', 'Puntos'], ascending=[True, False])
+    resultado = votos.groupby(["Categoria", "Opcion"])["Puntos"].sum().reset_index()
+    return resultado.sort_values(["Categoria", "Puntos"], ascending=[True, False])
 
 
 # ── Estadísticas ──────────────────────────────────────────────────────────────
@@ -264,34 +297,34 @@ def obtener_resultados_evento(id_evento: str) -> pd.DataFrame:
 def obtener_estadisticas_quincho() -> pd.DataFrame:
     """Retorna DataFrame con métricas de participación por cada pibe."""
     df_eventos = cargar_eventos()
-    df_votos = cargar_votos()
-    los_pibes = ["Mauri", "Chicho", "Palomo", "Luis", "Cristian", "Ova", "Pochi", "Sinchy"]
+    df_votos   = cargar_votos()
+    los_pibes  = ["Mauri", "Chicho", "Palomo", "Luis", "Cristian", "Ova", "Pochi", "Sinchy"]
     stats = []
 
     for pibe in los_pibes:
-        creados = len(df_eventos[df_eventos['Creador'] == pibe]) if not df_eventos.empty else 0
-        emitidos = len(df_votos[df_votos['Usuario'] == pibe]) if not df_votos.empty else 0
-        cancelar = len(df_votos[
-            (df_votos['Usuario'] == pibe) & (df_votos['Opcion'] == 'Cancelar')
+        creados   = len(df_eventos[df_eventos["Creador"] == pibe]) if not df_eventos.empty else 0
+        emitidos  = len(df_votos[df_votos["Usuario"] == pibe]) if not df_votos.empty else 0
+        cancelar  = len(df_votos[
+            (df_votos["Usuario"] == pibe) & (df_votos["Opcion"] == "Cancelar")
         ]) if not df_votos.empty else 0
         positivos = len(df_votos[
-            (df_votos['Usuario'] == pibe) &
-            (df_votos['Puntos'] >= 3) &
-            (df_votos['Categoria'] != 'Estado')
+            (df_votos["Usuario"] == pibe) &
+            (df_votos["Puntos"] >= 3) &
+            (df_votos["Categoria"] != "Estado")
         ]) if not df_votos.empty else 0
         negativos = len(df_votos[
-            (df_votos['Usuario'] == pibe) &
-            (df_votos['Puntos'] < 3) &
-            (df_votos['Categoria'] != 'Estado')
+            (df_votos["Usuario"] == pibe) &
+            (df_votos["Puntos"] < 3) &
+            (df_votos["Categoria"] != "Estado")
         ]) if not df_votos.empty else 0
 
         stats.append({
-            'Pibe': pibe,
-            'Juntadas Creadas': creados,
-            'Votos Emitidos': emitidos,
-            'Votos Positivos (3-5⭐)': positivos,
-            'Votos Negativos (1-2⭐)': negativos,
-            'Veces que Agitó Cancelar': cancelar,
+            "Pibe":                       pibe,
+            "Juntadas Creadas":           creados,
+            "Votos Emitidos":             emitidos,
+            "Votos Positivos (3-5⭐)":   positivos,
+            "Votos Negativos (1-2⭐)":   negativos,
+            "Veces que Agitó Cancelar":   cancelar,
         })
 
     return pd.DataFrame(stats)

@@ -107,23 +107,48 @@ st.markdown("""
 # ── Session state ─────────────────────────────────────────────────────────────
 if "usuario_actual" not in st.session_state:
     st.session_state["usuario_actual"] = LOS_PIBES[0]
+if "usuario_confirmado" not in st.session_state:
+    st.session_state["usuario_confirmado"] = False
+
+
+# ── Modal de confirmación de identidad ────────────────────────────────────────
+@st.dialog("👤 ¿Quién sos?")
+def _modal_confirmar_usuario():
+    st.markdown("""
+    <div style='text-align:center; padding: 8px 0 16px 0;'>
+        <div style='font-size:3em'>🍻</div>
+        <div style='font-size:1.1em; color:#9ca3af; margin-top:4px;'>
+            Antes de arrancar, confirmá quién sos.<br>
+            <span style='color:#f87171; font-size:.9em;'>Esto evita votar con el nombre de otro pibe.</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    seleccion = st.selectbox(
+        "Elegí tu nombre:",
+        LOS_PIBES,
+        index=LOS_PIBES.index(st.session_state["usuario_actual"]),
+        key="modal_sel_usuario",
+    )
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    if st.button(f"✅ Soy **{seleccion}**, entrar", type="primary", use_container_width=True):
+        st.session_state["usuario_actual"]   = seleccion
+        st.session_state["usuario_confirmado"] = True
+        st.rerun()
+
+
+# Mostrar el modal si el usuario aún no confirmó su identidad en esta sesión
+if not st.session_state["usuario_confirmado"]:
+    _modal_confirmar_usuario()
+    st.stop()  # Bloquea el resto de la app hasta que confirme
 
 
 # ════════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ════════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.markdown("## 👤 ¿Quién sos?")
-
-    nuevo_usuario = st.selectbox(
-        "Elegí tu nombre:",
-        LOS_PIBES,
-        index=LOS_PIBES.index(st.session_state["usuario_actual"]),
-        key="sel_usuario_box",
-    )
-    if nuevo_usuario != st.session_state["usuario_actual"]:
-        st.session_state["usuario_actual"] = nuevo_usuario
-        st.rerun()
+    st.markdown("## 👤 Sesión")
 
     st.markdown(f"""
     <div class="user-chip">
@@ -131,6 +156,10 @@ with st.sidebar:
         <div class="user-chip-name">{st.session_state['usuario_actual']}</div>
     </div>
     """, unsafe_allow_html=True)
+
+    if st.button("🔄 Cambiar usuario", use_container_width=True, key="btn_cambiar_usuario"):
+        st.session_state["usuario_confirmado"] = False
+        st.rerun()
 
     st.markdown("---")
     st.markdown(f"""
