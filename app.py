@@ -569,11 +569,24 @@ with tab_stats:
             st.bar_chart(df_stats.set_index("Pibe")[["Votos Emitidos"]], color="#818cf8")
 
         st.markdown("---")
+
+        # Resaltar el máximo solo cuando es mayor a 0 (evita resaltar ceros empatados)
+        HIGHLIGHT_COLS = ["Juntadas Creadas", "Votos Emitidos", "Veces que Agitó Cancelar"]
+
+        def _highlight_max_nonzero(df: pd.DataFrame):
+            styles = pd.DataFrame("", index=df.index, columns=df.columns)
+            for col in HIGHLIGHT_COLS:
+                if col in df.columns:
+                    col_max = df[col].max()
+                    if col_max > 0:
+                        styles.loc[df[col] == col_max, col] = (
+                            "background-color: #166534; color: #bbf7d0; font-weight: 700;"
+                        )
+            return styles
+
         st.dataframe(
-            df_stats.style.highlight_max(
-                axis=0,
-                subset=["Juntadas Creadas", "Votos Emitidos", "Veces que Agitó Cancelar"],
-                color="#2d4a1e",
-            ),
+            df_stats.style.apply(_highlight_max_nonzero, axis=None),
             hide_index=True,
+            use_container_width=True,
         )
+
