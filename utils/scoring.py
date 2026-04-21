@@ -2,7 +2,6 @@ import uuid
 import pandas as pd
 import streamlit as st
 import gspread
-from google.oauth2.service_account import Credentials
 
 UMBRAL_CANCELACION = 4
 
@@ -20,12 +19,11 @@ COLS_VOTOS    = ["ID_Evento", "Usuario", "Categoria", "Opcion", "Puntos"]
 
 @st.cache_resource
 def _get_client() -> gspread.Client:
-    """Devuelve un cliente gspread autenticado. Se crea una sola vez por sesión."""
-    creds = Credentials.from_service_account_info(
+    """Devuelve un cliente gspread autenticado con refresh automático de token."""
+    return gspread.service_account_from_dict(
         st.secrets["gcp_service_account"],
         scopes=SCOPES,
     )
-    return gspread.authorize(creds)
 
 
 def _get_sheet(sheet_name: str) -> gspread.Worksheet:
