@@ -148,14 +148,15 @@ def agregar_opcion(id_evento: str, categoria: str, opcion: str):
 
 
 def obtener_opciones_evento(id_evento: str) -> dict:
-    """Retorna {Fecha: [...], Lugar: [...]} para el evento dado."""
+    """Retorna {Fecha: [...], Lugar: [...], Modalidad: [...]} para el evento dado."""
     df = cargar_opciones()
     if df.empty:
-        return {'Fecha': [], 'Lugar': []}
+        return {'Fecha': [], 'Lugar': [], 'Modalidad': []}
     opciones = df[df['ID_Evento'] == id_evento]
     return {
-        'Fecha': opciones[opciones['Categoria'] == 'Fecha']['Opcion'].tolist(),
-        'Lugar': opciones[opciones['Categoria'] == 'Lugar']['Opcion'].tolist(),
+        'Fecha':     opciones[opciones['Categoria'] == 'Fecha']['Opcion'].tolist(),
+        'Lugar':     opciones[opciones['Categoria'] == 'Lugar']['Opcion'].tolist(),
+        'Modalidad': opciones[opciones['Categoria'] == 'Modalidad']['Opcion'].tolist(),
     }
 
 
@@ -190,6 +191,30 @@ def registrar_voto(id_evento: str, usuario: str, categoria: str, opcion: str, pu
 def registrar_voto_cancelar(id_evento: str, usuario: str):
     """Registra que un usuario se bata del evento."""
     registrar_voto(id_evento, usuario, 'Estado', 'Cancelar', 1)
+
+
+def registrar_voto_unico(id_evento: str, usuario: str, categoria: str, opcion: str, puntos: int = 1):
+    """Para categorías de elección única (ej: Modalidad): elimina votos previos
+    del usuario en esa categoría antes de guardar el nuevo, evitando duplicados."""
+    df = cargar_votos()
+    # Borrar cualquier voto previo del usuario en esta categoría
+    mask_old = (
+        (df['ID_Evento'] == id_evento) &
+        (df['Usuario'] == usuario) &
+        (df['Categoria'] == categoria)
+    )
+    df = df[~mask_old]
+    # Insertar el nuevo voto
+    nuevo = pd.DataFrame([{
+        'ID_Evento': id_evento,
+        'Usuario':   usuario,
+        'Categoria': categoria,
+        'Opcion':    opcion,
+        'Puntos':    int(puntos),
+    }])
+    df = pd.concat([df, nuevo], ignore_index=True)
+    df.to_csv(VOTOS_FILE, index=False)
+    _invalidar_cache()
 
 
 def obtener_votos_usuario(id_evento: str, usuario: str) -> dict:

@@ -257,7 +257,30 @@ with tab_tablero:
                             args=(id_evento, usuario_actual, "Lugar", lu, k),
                         )
 
-                if not fechas and not lugares:
+                # ── Modalidad ────────────────────────────────────────────
+                modalidades = opciones.get("Modalidad", [])
+                if modalidades:
+                    st.markdown('<div class="sec-label">🎭 ¿Cómo venimos?</div>', unsafe_allow_html=True)
+                    st.caption("Votá cada modalidad — puede ganar la que más pibes quieran.")
+                    for m in modalidades:
+                        k = f"radio_{id_evento}_{usuario_actual}_M_{m}"
+                        voto_pts   = votos_usuario.get(("Modalidad", m))
+                        voto_label = PTS_TO_LABEL.get(voto_pts)
+                        if k not in st.session_state and voto_label:
+                            st.session_state[k] = voto_label
+                        st.radio(
+                            f"🎭 {m}",
+                            options=VOTO_OPTIONS,
+                            index=(VOTO_OPTIONS.index(st.session_state[k])
+                                   if k in st.session_state and st.session_state[k] in VOTO_OPTIONS
+                                   else None),
+                            horizontal=True,
+                            key=k,
+                            on_change=_auto_votar,
+                            args=(id_evento, usuario_actual, "Modalidad", m, k),
+                        )
+
+                if not fechas and not lugares and not modalidades:
                     st.info("Este evento no tiene opciones todavía.")
 
                 # ── Sugerir nueva opción ─────────────────────────────────────
@@ -318,7 +341,7 @@ with tab_tablero:
                 if votos_evento.empty:
                     st.info("Sin votos todavía.\nSé el primero 👈")
                 else:
-                    for cat, emoji in [("Fecha", "📅"), ("Lugar", "📍")]:
+                    for cat, emoji in [("Fecha", "📅"), ("Lugar", "📍"), ("Modalidad", "🎭")]:
                         ops_cat = opciones.get(cat, [])
                         if not ops_cat:
                             continue
@@ -453,6 +476,9 @@ with tab_nueva:
                 agregar_opcion(nuevo_id, "Fecha", f)
             for lu in [x.strip() for x in lugares_input.split(",") if x.strip()]:
                 agregar_opcion(nuevo_id, "Lugar", lu)
+            # Las 3 modalidades se crean automáticamente en cada juntada
+            for m in ["Solos", "En pareja", "En familia"]:
+                agregar_opcion(nuevo_id, "Modalidad", m)
             st.success(f"🎉 ¡Juntada **'{motivo_input.strip()}'** creada!")
             st.info("Andá al **Tablero** 👆 y respondé tu disponibilidad.")
 
