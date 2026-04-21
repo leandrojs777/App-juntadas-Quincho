@@ -40,6 +40,11 @@ except Exception as _e:
     )
     st.stop()
 
+# ── Manejo de mensajes globales ───────────────────────────────────────────────
+if "mensaje_exito" in st.session_state:
+    st.success(st.session_state["mensaje_exito"])
+    del st.session_state["mensaje_exito"]
+
 # ── Constantes de votación ────────────────────────────────────────────────────
 # El sistema usa 3 niveles: puedo (5pts) / capaz (3pts) / no puedo (1pt)
 VOTO_OPTIONS = ["✅ Puedo", "🤔 Capaz", "❌ No puedo"]
@@ -473,6 +478,10 @@ with tab_tablero:
                     if not tiene_votos:
                         st.caption("⚠️ Necesitás al menos un voto para concretar.")
 
+        # Al salir del expander, para el próximo rerun reseteamos la bandera
+        if voting_active:
+            st.session_state[f"voting_active_{id_evento}"] = False
+
     # ── Historial ─────────────────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("📜 Historial")
@@ -542,9 +551,12 @@ with tab_nueva:
             # Las 3 modalidades se crean automáticamente en cada juntada
             for m in ["Solos", "En pareja", "En familia"]:
                 agregar_opcion(nuevo_id, "Modalidad", m)
-            st.success(f"🎉 ¡Juntada **'{motivo_input.strip()}'** creada!")
-            st.info("Andá al **Tablero** 👆 y respondé tu disponibilidad.")
-
+            
+            st.session_state["mensaje_exito"] = (
+                f"🎉 ¡Juntada **'{motivo_input.strip()}'** creada! "
+                "Andá al **Tablero** 👆 y respondé tu disponibilidad."
+            )
+            st.rerun()
 
 # ════════════════════════════════════════════════════════════════════════════════
 # TAB 3 — ESTADÍSTICAS

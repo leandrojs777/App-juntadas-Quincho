@@ -131,14 +131,14 @@ def crear_evento(motivo: str, creador: str) -> str:
 
 def cambiar_estado_evento(id_evento: str, estado_nuevo: str) -> bool:
     """Cambia el estado de un evento. Retorna True si fue exitoso."""
-    df_eventos = cargar_eventos()
+    df_eventos = _cargar_df("eventos", COLS_EVENTOS)
     mask = df_eventos["ID_Evento"] == id_evento
 
     if df_eventos[mask].empty:
         return False
 
     if estado_nuevo == "Concretado":
-        df_votos = cargar_votos()
+        df_votos = _cargar_df("votos", COLS_VOTOS)
         votos_reales = df_votos[
             (df_votos["ID_Evento"] == id_evento) &
             (df_votos["Categoria"] != "Estado")
@@ -154,8 +154,8 @@ def cambiar_estado_evento(id_evento: str, estado_nuevo: str) -> bool:
 
 def verificar_estado_evento(id_evento: str):
     """Auto-cancela el evento si se supera el umbral de cancelaciones."""
-    df_eventos = cargar_eventos()
-    df_votos   = cargar_votos()
+    df_eventos = _cargar_df("eventos", COLS_EVENTOS)
+    df_votos   = _cargar_df("votos", COLS_VOTOS)
 
     mask_cancelar = (
         (df_votos["ID_Evento"] == id_evento) &
@@ -204,7 +204,7 @@ def obtener_opciones_evento(id_evento: str) -> dict:
 
 def registrar_voto(id_evento: str, usuario: str, categoria: str, opcion: str, puntos: int):
     """Registra o actualiza el voto de un usuario en una opción."""
-    df = cargar_votos()
+    df = _cargar_df("votos", COLS_VOTOS)
     mask = (
         (df["ID_Evento"] == id_evento) &
         (df["Usuario"] == usuario) &
@@ -231,7 +231,7 @@ def registrar_voto_cancelar(id_evento: str, usuario: str):
 
 def registrar_voto_unico(id_evento: str, usuario: str, categoria: str, opcion: str, puntos: int = 1):
     """Para categorías de elección única: elimina votos previos del usuario en esa categoría."""
-    df = cargar_votos()
+    df = _cargar_df("votos", COLS_VOTOS)
     mask_old = (
         (df["ID_Evento"] == id_evento) &
         (df["Usuario"] == usuario) &
