@@ -34,12 +34,19 @@ PTS_TO_LABEL = {5: "✅ Puedo", 3: "🤔 Capaz", 1: "❌ No puedo"}
 LOS_PIBES    = ["Mauri", "Chicho", "Palomo", "Luis", "Cristian", "Ova", "Pochi", "Sinchy"]
 
 
+# Etiquetas plurales correctas por categoría
+CAT_LABEL = {"Fecha": "Fechas", "Lugar": "Lugares", "Modalidad": "Modalidad"}
+
 # ── Callback auto-save ────────────────────────────────────────────────────────
 # Se dispara en on_change del radio — guarda el voto sin botón extra.
+# También marca el evento como "en votación activa" para evitar que el
+# expander se cierre automáticamente durante el proceso de voto.
 def _auto_votar(id_evento: str, usuario: str, categoria: str, opcion: str, key: str):
     label = st.session_state.get(key)
     if label and label in VOTO_PTS:
         registrar_voto(id_evento, usuario, categoria, opcion, VOTO_PTS[label])
+    # Mantener expander abierto mientras el usuario está votando
+    st.session_state[f"voting_active_{id_evento}"] = True
 
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
@@ -65,22 +72,23 @@ st.markdown("""
     .badge-done   { background:#1e3a5f; color:#60a5fa; border:1px solid #3b82f6; }
 
     /* Resultados */
-    .res-row { 
+    .res-row {
         display:flex; align-items:center; justify-content:space-between;
-        background:#111827; border-radius:10px; padding:10px 14px;
+        background:#1e2533; border-radius:10px; padding:11px 16px;
         margin-bottom:8px; gap:10px;
+        border: 1px solid #374151;
     }
-    .res-name    { font-weight:600; font-size:.95em; flex:1; }
-    .res-counts  { display:flex; gap:14px; font-size:.9em; white-space:nowrap; }
-    .cnt-ok      { color:#4ade80; }
-    .cnt-maybe   { color:#fbbf24; }
-    .cnt-no      { color:#f87171; }
+    .res-name    { font-weight:600; font-size:.95em; flex:1; color:#f3f4f6; }
+    .res-counts  { display:flex; gap:14px; font-size:.92em; white-space:nowrap; }
+    .cnt-ok      { color:#4ade80; font-weight:700; }
+    .cnt-maybe   { color:#fbbf24; font-weight:700; }
+    .cnt-no      { color:#f87171; font-weight:700; }
     .lider-badge { font-size:.75em; background:#14532d; color:#4ade80;
                    border:1px solid #22c55e; border-radius:12px;
                    padding:1px 8px; margin-left:6px; }
 
     /* Section dividers */
-    .sec-label { font-size:.72em; font-weight:700; color:#6b7280;
+    .sec-label { font-size:.72em; font-weight:700; color:#9ca3af;
                  letter-spacing:1px; text-transform:uppercase;
                  margin: 14px 0 4px 0; }
 
@@ -195,7 +203,12 @@ with tab_tablero:
 
         titulo = f"🔥 {motivo}  ·  por {creador}  ·  {participantes}/8 pibes respondieron"
 
-        with st.expander(titulo, expanded=not ya_voto):
+        # El expander permanece abierto si el usuario aún no votó
+        # o si está en proceso de votar (voting_active se setea en _auto_votar)
+        voting_active = st.session_state.get(f"voting_active_{id_evento}", False)
+        should_expand = (not ya_voto) or voting_active
+
+        with st.expander(titulo, expanded=should_expand):
             st.markdown(badge_html, unsafe_allow_html=True)
             st.markdown("")
 
@@ -204,6 +217,13 @@ with tab_tablero:
             opciones = obtener_opciones_evento(id_evento)
             fechas   = opciones.get("Fecha", [])
             lugares  = opciones.get("Lugar", [])
+
+            # ── Auto-migración: eventos creados antes de la feature de Modalidad ──
+            modalidades_en_bd = opciones.get("Modalidad", [])
+            if not modalidades_en_bd and (fechas or lugares):
+                for m in ["Solos", "En pareja", "En familia"]:
+                    agregar_opcion(id_evento, "Modalidad", m)
+                opciones["Modalidad"] = ["Solos", "En pareja", "En familia"]
 
             # ── COLUMNA VOTAR ────────────────────────────────────────────────
             with col_votar:
@@ -364,7 +384,7 @@ with tab_tablero:
                         sorted_ops = sorted(ops_cat, key=lambda x: scores[x]["total"], reverse=True)
 
                         st.markdown(
-                            f'<div class="sec-label">{emoji} {cat}s</div>',
+                            f'<div class="sec-label">{emoji} {CAT_LABEL.get(cat, cat)}</div>',
                             unsafe_allow_html=True,
                         )
 
