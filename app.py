@@ -24,21 +24,28 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-try:
-    inicializar_datos()
-except Exception as _e:
-    _sa_email = ""
+# Solo inicializar una vez por sesión (evita gastar quota de API en cada rerun)
+if "sheets_initialized" not in st.session_state:
     try:
-        _sa_email = st.secrets["gcp_service_account"].get("client_email", "")
-    except Exception:
-        pass
-    st.error(
-        "⚠️ **No se pudo conectar a Google Sheets.**\n\n"
-        + (f"Verificá que la hoja esté compartida con:\n`{_sa_email}`\n\n" if _sa_email else "")
-        + "También revisá que el `spreadsheet_id` en los secrets sea correcto "
-        + "y que las APIs de Google Sheets y Drive estén habilitadas en tu proyecto GCP."
-    )
-    st.stop()
+        inicializar_datos()
+        st.session_state["sheets_initialized"] = True
+    except Exception as _e:
+        _sa_email = ""
+        try:
+            _sa_email = st.secrets["gcp_service_account"].get("client_email", "")
+        except Exception:
+            pass
+        st.error(
+            "⚠️ **No se pudo conectar a Google Sheets.**\n\n"
+            + (f"Verificá que la hoja esté compartida con:\n`{_sa_email}`\n\n" if _sa_email else "")
+            + "También revisá que el `spreadsheet_id` en los secrets sea correcto "
+            + "y que las APIs de Google Sheets y Drive estén habilitadas en tu proyecto GCP.\n\n"
+            + f"Detalle técnico: `{type(_e).__name__}: {_e}`"
+        )
+        if st.button("🔄 Reintentar conexión", type="primary"):
+            st.cache_resource.clear()
+            st.rerun()
+        st.stop()
 
 # ── Manejo de mensajes globales ───────────────────────────────────────────────
 if "mensaje_exito" in st.session_state:

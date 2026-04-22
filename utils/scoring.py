@@ -1,7 +1,9 @@
 import uuid
+import time
 import pandas as pd
 import streamlit as st
 import gspread
+from google.oauth2.service_account import Credentials
 
 UMBRAL_CANCELACION = 4
 
@@ -10,6 +12,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+_MAX_RETRIES = 3
+_RETRY_DELAY = 2  # seconds
+
 COLS_EVENTOS  = ["ID_Evento", "Motivo", "Creador", "Estado"]
 COLS_OPCIONES = ["ID_Evento", "Categoria", "Opcion"]
 COLS_VOTOS    = ["ID_Evento", "Usuario", "Categoria", "Opcion", "Puntos"]
@@ -17,21 +22,58 @@ COLS_VOTOS    = ["ID_Evento", "Usuario", "Categoria", "Opcion", "Puntos"]
 
 # ── Conexión a Google Sheets ──────────────────────────────────────────────────
 
-@st.cache_resource
+def _validate_client(client: gspread.Client) -> bool:
+    """Verifica que el cliente gspread tenga credenciales válidas (no expiradas)."""
+    try:
+        creds = client.auth
+        # Si el token ya expiró o está por expirar, invalidar el cache
+        if hasattr(creds, 'expired') and creds.expired:
+            return False
+        # Intenta una operación liviana para validar conectividad
+        spreadsheet_id = st.secrets["sheets"]["spreadsheet_id"]
+        client.open_by_key(spreadsheet_id)
+        return True
+    except Exception:
+        return False
+
+
+@st.cache_resource(validate=_validate_client)
 def _get_client() -> gspread.Client:
-    """Devuelve un cliente gspread autenticado con refresh automático de token."""
-    return gspread.service_account_from_dict(
-        st.secrets["gcp_service_account"],
+    """Devuelve un cliente gspread autenticado. Se regenera automáticamente si el token expira."""
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]),
         scopes=SCOPES,
     )
+    return gspread.authorize(creds)
 
 
 def _get_sheet(sheet_name: str) -> gspread.Worksheet:
-    """Retorna la hoja (pestaña) indicada dentro del spreadsheet configurado."""
-    client = _get_client()
-    spreadsheet_id = st.secrets["sheets"]["spreadsheet_id"]
-    spreadsheet = client.open_by_key(spreadsheet_id)
-    return spreadsheet.worksheet(sheet_name)
+    """Retorna la hoja (pestaña) indicada dentro del spreadsheet configurado.
+    Incluye reintentos automáticos para errores transitorios de red/API."""
+    last_err = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            client = _get_client()
+            spreadsheet_id = st.secrets["sheets"]["spreadsheet_id"]
+            spreadsheet = client.open_by_key(spreadsheet_id)
+            return spreadsheet.worksheet(sheet_name)
+        except gspread.exceptions.APIError as e:
+            last_err = e
+            status = e.response.status_code if hasattr(e, 'response') else 0
+            if status in (401, 403):
+                # Token expirado o sin permisos → forzar nuevo cliente
+                _get_client.clear()
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_DELAY * (attempt + 1))
+            else:
+                raise
+        except Exception as e:
+            last_err = e
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_DELAY * (attempt + 1))
+            else:
+                raise
+    raise last_err  # No debería llegar acá, pero por seguridad
 
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
@@ -73,32 +115,54 @@ def _guardar_df(sheet_name: str, df: pd.DataFrame):
 # ── Init ──────────────────────────────────────────────────────────────────────
 
 def inicializar_datos():
-    """Crea las hojas necesarias si no existen y verifica sus headers. Idempotente."""
-    client = _get_client()
-    spreadsheet_id = st.secrets["sheets"]["spreadsheet_id"]
-    spreadsheet = client.open_by_key(spreadsheet_id)
-    existing_titles = [ws.title for ws in spreadsheet.worksheets()]
+    """Crea las hojas necesarias si no existen y verifica sus headers.
+    Idempotente, con reintentos para errores transitorios."""
+    last_err = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            client = _get_client()
+            spreadsheet_id = st.secrets["sheets"]["spreadsheet_id"]
+            spreadsheet = client.open_by_key(spreadsheet_id)
+            existing_titles = [ws.title for ws in spreadsheet.worksheets()]
 
-    sheets_needed = [
-        ("eventos",  COLS_EVENTOS),
-        ("opciones", COLS_OPCIONES),
-        ("votos",    COLS_VOTOS),
-    ]
+            sheets_needed = [
+                ("eventos",  COLS_EVENTOS),
+                ("opciones", COLS_OPCIONES),
+                ("votos",    COLS_VOTOS),
+            ]
 
-    for sheet_name, cols in sheets_needed:
-        if sheet_name not in existing_titles:
-            # Si existe "Hoja 1" (hoja por defecto vacía), renombrarla
-            if "Hoja 1" in existing_titles and sheets_needed.index((sheet_name, cols)) == 0:
-                ws = spreadsheet.worksheet("Hoja 1")
-                ws.update_title(sheet_name)
-                existing_titles = [sheet_name if t == "Hoja 1" else t for t in existing_titles]
+            for sheet_name, cols in sheets_needed:
+                if sheet_name not in existing_titles:
+                    # Si existe "Hoja 1" (hoja por defecto vacía), renombrarla
+                    if "Hoja 1" in existing_titles and sheets_needed.index((sheet_name, cols)) == 0:
+                        ws = spreadsheet.worksheet("Hoja 1")
+                        ws.update_title(sheet_name)
+                        existing_titles = [sheet_name if t == "Hoja 1" else t for t in existing_titles]
+                    else:
+                        ws = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=len(cols))
+                    ws.append_row(cols)
+                else:
+                    ws = spreadsheet.worksheet(sheet_name)
+                    if not ws.row_values(1):
+                        ws.append_row(cols)
+            return  # Éxito
+
+        except gspread.exceptions.APIError as e:
+            last_err = e
+            status = e.response.status_code if hasattr(e, 'response') else 0
+            if status in (401, 403):
+                _get_client.clear()
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_DELAY * (attempt + 1))
             else:
-                ws = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=len(cols))
-            ws.append_row(cols)
-        else:
-            ws = spreadsheet.worksheet(sheet_name)
-            if not ws.row_values(1):
-                ws.append_row(cols)
+                raise
+        except Exception as e:
+            last_err = e
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_DELAY * (attempt + 1))
+            else:
+                raise
+    raise last_err  # Seguridad
 
 
 # ── Lectura con caché (TTL=5s) ────────────────────────────────────────────────
