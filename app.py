@@ -127,6 +127,20 @@ st.markdown("""
                  border:1px solid #6366f1; border-radius:14px;
                  padding:12px 16px; text-align:center; margin-bottom:4px; }
     .user-chip-name { font-size:1.1em; font-weight:700; color:#a5b4fc; }
+
+    /* Voter detail chips */
+    .voters-detail { padding:6px 12px 10px 12px; margin:-4px 0 8px 0;
+                     background:#161d2d; border-radius:0 0 10px 10px;
+                     border:1px solid #374151; border-top:none; }
+    .voters-group { display:flex; flex-wrap:wrap; gap:5px; align-items:center;
+                    margin:4px 0; }
+    .voters-group-label { font-size:.7em; font-weight:700; min-width:22px;
+                          margin-right:2px; }
+    .voter-chip { display:inline-block; border-radius:12px; padding:1px 9px;
+                  font-size:.72em; font-weight:600; line-height:1.7; }
+    .voter-ok    { background:#052e16; color:#86efac; border:1px solid #22c55e44; }
+    .voter-maybe { background:#1c1a05; color:#fde68a; border:1px solid #eab30844; }
+    .voter-no    { background:#2a0505; color:#fca5a5; border:1px solid #ef444444; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -459,6 +473,32 @@ with tab_tablero:
                                 f'</div>',
                                 unsafe_allow_html=True,
                             )
+
+                            # ── Detalle: quién votó cada opción ──
+                            votos_op = votos_evento[
+                                (votos_evento["Categoria"] == cat) &
+                                (votos_evento["Opcion"] == op)
+                            ]
+                            if not votos_op.empty:
+                                nombres_ok    = votos_op[votos_op["Puntos"] == 5]["Usuario"].tolist()
+                                nombres_capaz = votos_op[votos_op["Puntos"] == 3]["Usuario"].tolist()
+                                nombres_no    = votos_op[votos_op["Puntos"] == 1]["Usuario"].tolist()
+
+                                chips_html = '<div class="voters-detail">'
+                                if nombres_ok:
+                                    chips_html += '<div class="voters-group"><span class="voters-group-label">✅</span>'
+                                    chips_html += " ".join(f'<span class="voter-chip voter-ok">{n}</span>' for n in nombres_ok)
+                                    chips_html += '</div>'
+                                if nombres_capaz:
+                                    chips_html += '<div class="voters-group"><span class="voters-group-label">🤔</span>'
+                                    chips_html += " ".join(f'<span class="voter-chip voter-maybe">{n}</span>' for n in nombres_capaz)
+                                    chips_html += '</div>'
+                                if nombres_no:
+                                    chips_html += '<div class="voters-group"><span class="voters-group-label">❌</span>'
+                                    chips_html += " ".join(f'<span class="voter-chip voter-no">{n}</span>' for n in nombres_no)
+                                    chips_html += '</div>'
+                                chips_html += '</div>'
+                                st.markdown(chips_html, unsafe_allow_html=True)
 
                 if canceladores:
                     st.markdown(
